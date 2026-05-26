@@ -1,32 +1,19 @@
 """
 PULSO DE CALIDAD SPC
-Desarrollado por Jerson Andrés López Wilches
+Aplicacion web para Control Estadistico de Procesos (CEP/SPC).
+Desarrollador: Jerson Andres Lopez Wilches
+Contacto: jerssonpriv@gmail.com
 
-Aplicación para Control Estadístico de Procesos orientada a análisis profesional de datos.
+Uso recomendado:
+  NUBE STREAMLIT BUSCAR CON NOMBRE PULSO DE CALIDAD SPC+
 
-CÓMO EJECUTAR
-1. Instalar librerías:
-   python app.py --install
-
-2. Ejecutar pruebas internas:
-   python app.py --self-test
-
-3. Ejecutar la aplicación:
-   python -m streamlit run app.py
-
-ESTRUCTURA DEL CÓDIGO
-1. Funciones generales
-2. Cálculos estadísticos base
-3. Análisis de capacidad del proceso
-4. Cartas de control
-5. Interfaz y gráficos
-6. Módulos de la aplicación
-7. Reporte en Excel
-8. Pruebas internas
-9. Ejecución principal
-
-Este proyecto fue diseñado para resolver análisis completos de control estadístico,
-incluyendo validación de supuestos, monitoreo, capacidad y toma de decisiones.
+Estructura logica del codigo:
+    1. Dependencias y utilidades generales.
+    2. Banco central de parametros del proceso.
+    3. Calculos estadisticos CEP.
+    4. Graficos y componentes visuales.
+    5. Pantallas o secciones de la aplicacion.
+    6. Pruebas internas y arranque de Streamlit.
 """
 
 from __future__ import annotations
@@ -70,12 +57,12 @@ def instalar_paquetes(paquetes: list[str]) -> bool:
     try:
         subprocess.check_call(comando)
         print("Instalación completada.")
-        print("Ejecuta: python -m streamlit run app.py")
+        print("Ejecuta: py -m streamlit run PulsoCalidadSPC_FINAL_DEPURADA.py")
         return True
     except Exception as error:
         print(f"No se pudo instalar: {error}")
         print("Ejecuta manualmente:")
-        print("python -m pip install streamlit pandas numpy scipy statsmodels plotly openpyxl")
+        print("py -m pip install streamlit pandas numpy scipy statsmodels plotly openpyxl")
         return False
 
 
@@ -87,10 +74,10 @@ def mensaje_dependencias(faltantes: list[str]) -> str:
         *[f"- {p}" for p in faltantes],
         "",
         "Solución:",
-        "python -m pip install streamlit pandas numpy scipy statsmodels plotly openpyxl",
+        "py -m pip install streamlit pandas numpy scipy statsmodels plotly openpyxl",
         "",
         "Luego ejecuta:",
-        "python -m streamlit run app.py",
+        "py -m streamlit run PulsoCalidadSPC_FINAL_DEPURADA.py",
     ]
     return "\n".join(lineas)
 
@@ -112,11 +99,8 @@ else:
 
 
 # ============================================================
-# 1. FUNCIONES GENERALES
+# UTILIDADES GENERALES
 # ============================================================
-# Funciones de apoyo para manejo de datos, limpieza, validación y formato
-# Incluye herramientas para asegurar consistencia en los datos y su visualización
-# - guardar valores aunque se cambie de módulo
 
 def verificar_dependencias_base() -> None:
     if FALTAN_BASE:
@@ -246,6 +230,130 @@ def numero_persistente(st, etiqueta, nombre, valor_defecto, **kwargs):
     )
 
 
+# ============================================================
+# PARÁMETROS COMPARTIDOS ENTRE MÓDULOS
+# ============================================================
+
+def _set_persistente(st, nombre, valor):
+    """Actualiza un valor base sin modificar widgets ya creados.
+
+    Streamlit no permite cambiar st.session_state de una llave usada por un
+    widget después de que el widget fue instanciado en la misma ejecución. Por
+    eso se actualiza siempre la llave lógica y solo se inicializa la llave del
+    widget cuando todavía no existe.
+    """
+    try:
+        if isinstance(valor, (np.integer, np.floating)):
+            valor = float(valor)
+    except Exception:
+        pass
+    st.session_state[nombre] = valor
+    clave_widget = f"_widget_{nombre}"
+    if clave_widget not in st.session_state:
+        st.session_state[clave_widget] = valor
+
+
+def parametros_proceso(st) -> dict:
+    """Devuelve el banco central de parámetros técnicos del proceso."""
+    return st.session_state.get("parametros_proceso", {}) or {}
+
+
+def guardar_parametros_proceso(st, **kwargs) -> None:
+    """Guarda parámetros que deben viajar entre capacidad, PNC, diseño, reporte y conclusiones."""
+    params = parametros_proceso(st).copy()
+    for k, v in kwargs.items():
+        if v is not None:
+            try:
+                if isinstance(v, (np.integer, np.floating)):
+                    v = float(v)
+            except Exception:
+                pass
+            params[k] = v
+    params["actualizado"] = pd.Timestamp.now().strftime("%Y-%m-%d %H:%M:%S")
+    st.session_state["parametros_proceso"] = params
+
+
+def sincronizar_parametros_widgets(st) -> None:
+    """Envía los parámetros técnicos activos a los campos de los módulos siguientes."""
+    p = parametros_proceso(st)
+    if not p:
+        return
+    mapa = {
+        "vn": ["cap_vn", "nc_vn", "rep_vn", "conc_vn"],
+        "lie": ["cap_lie", "nc_lie", "rep_lie", "conc_lie"],
+        "lse": ["cap_lse", "nc_lse", "rep_lse", "conc_lse"],
+        "media": ["cap_media_conocida", "dis_media_actual"],
+        "sigma": ["cap_sigma_historica", "dis_sigma", "rep_sigma_hist"],
+        "nsub": ["cap_nsub", "dis_n"],
+        "intervalo": ["cap_intervalo", "dis_intervalo"],
+    }
+    for origen, destinos in mapa.items():
+        if origen in p:
+            for destino in destinos:
+                _set_persistente(st, destino, p[origen])
+    if "variable" in p:
+        for destino in ["cap_variable", "nc_variable", "sup_variable", "rep_variable", "conc_variable"]:
+            st.session_state[destino] = p["variable"]
+            clave_widget = f"_widget_{destino}"
+            if clave_widget not in st.session_state:
+                st.session_state[clave_widget] = p["variable"]
+    if "media_detectar" in p:
+        _set_persistente(st, "cap_media_detectar", p["media_detectar"])
+        _set_persistente(st, "dis_media_cambio", p["media_detectar"])
+
+
+def actualizar_parametros_desde_df(st, df, variable=None) -> None:
+    """Crea parámetros lógicos iniciales al cargar o cambiar datos."""
+    if not dataframe_valido(df):
+        return
+    nums = columnas_numericas(df)
+    if not nums:
+        return
+    if variable not in nums:
+        variable = nums[0]
+    s = convertir_a_numerica(obtener_columna(df, variable))
+    if len(s) == 0:
+        return
+    media = float(s.mean())
+    sigma = float(s.std(ddof=1)) if len(s) > 1 else 1.0
+    if pd.isna(sigma) or sigma <= 0:
+        sigma = 1.0
+    lie = float(s.min())
+    lse = float(s.max())
+    vn = float((lie + lse) / 2) if lie < lse else media
+    tolerancia = float(max(abs(lse - vn), abs(vn - lie), sigma))
+    guardar_parametros_proceso(
+        st,
+        variable=variable,
+        media=media,
+        sigma=sigma,
+        vn=vn,
+        lie=lie,
+        lse=lse,
+        tolerancia=tolerancia,
+        n=int(len(s)),
+    )
+    sincronizar_parametros_widgets(st)
+
+
+def panel_parametros_activos(st):
+    """Muestra los parámetros que la app reutiliza en los módulos posteriores."""
+    p = parametros_proceso(st)
+    if not p:
+        caja_estado(st, "info", "Cuando cargues datos o calcules capacidad, la app guardará media, sigma, VN, LIE y LSE para usarlos en los demás módulos.")
+        return
+    mostrar = {
+        "Variable activa": p.get("variable", "No definida"),
+        "Media usada": p.get("media", np.nan),
+        "Sigma usada": p.get("sigma", np.nan),
+        "VN": p.get("vn", np.nan),
+        "LIE": p.get("lie", np.nan),
+        "LSE": p.get("lse", np.nan),
+    }
+    tarjetas(st, mostrar, "Parámetros activos del proceso")
+    caja_estado(st, "info", "Estos valores alimentan automáticamente Capacidad, PNC, Diseño de gráficos, Reportes y Conclusiones. Puedes cambiarlos manualmente si tu ejercicio entrega especificaciones distintas.")
+
+
 def checkbox_persistente(st, etiqueta, nombre, valor_defecto=False, **kwargs):
     guardar_estado_si_no_existe(st, nombre, valor_defecto)
     clave_widget = f"_widget_{nombre}"
@@ -328,10 +436,8 @@ def convertir_ancho_a_largo(df, columna_subgrupo):
 
 
 # ============================================================
-# 2. CÁLCULOS ESTADÍSTICOS BASE
+# CÁLCULOS ESTADÍSTICOS
 # ============================================================
-# Funciones estadísticas fundamentales utilizadas en todo el sistema
-# Permiten evaluar comportamiento del proceso y validez de los datos
 
 def resumen_descriptivo(serie):
     verificar_dependencias_base()
@@ -449,10 +555,8 @@ def evaluar_homocedasticidad(df, columna_valor, columna_grupo):
 
 
 # ============================================================
-# 3. ANÁLISIS DE CAPACIDAD DEL PROCESO
+# CAPACIDAD
 # ============================================================
-# Implementación completa del análisis de capacidad del proceso
-# Incluye métricas clásicas, estimaciones, riesgo y escenarios de mejora
 
 def clasificar_capacidad(cpk: float) -> str:
     if cpk >= 1.67:
@@ -601,10 +705,28 @@ def media_maxima_para_pnc_lse(lse, sigma, pnc_lse):
 def potencia_xbarra(media_actual, media_cambio, sigma, n, z=3):
     if sigma <= 0 or n <= 0:
         return None
-    d = abs(media_cambio - media_actual) / sigma
-    potencia = float(1 - stats.norm.cdf(z - d * np.sqrt(n)))
+    diferencia = abs(media_cambio - media_actual)
+    d = diferencia / sigma
+    d_raiz_n = d * np.sqrt(n)
+    z_menos = z - d_raiz_n
+    beta = float(stats.norm.cdf(z_menos))
+    potencia = float(1 - beta)
     arl = np.inf if potencia <= 0 else 1 / potencia
-    return {"d": d, "Potencia": potencia, "% Potencia": potencia * 100, "ARL1": arl}
+    return {
+        "Media actual": float(media_actual),
+        "Media a detectar": float(media_cambio),
+        "Sigma usada": float(sigma),
+        "Diferencia absoluta": float(diferencia),
+        "d": float(d),
+        "d√n": float(d_raiz_n),
+        "Z crítico": float(z),
+        "Z crítico - d√n": float(z_menos),
+        "β": float(beta),
+        "% β": float(beta * 100),
+        "Potencia = 1 - β": potencia,
+        "% Potencia": potencia * 100,
+        "ARL1": arl,
+    }
 
 
 def n_para_potencia(media_actual, media_cambio, sigma, potencia_objetivo, z=3):
@@ -616,10 +738,8 @@ def n_para_potencia(media_actual, media_cambio, sigma, potencia_objetivo, z=3):
 
 
 # ============================================================
-# 4. CARTAS DE CONTROL
+# CARTAS DE CONTROL
 # ============================================================
-# Implementación de cartas de control para variables y atributos
-# Permite evaluar estabilidad del proceso y detectar causas especiales
 
 def constantes_xbar_r(n):
     tabla = {
@@ -790,11 +910,148 @@ def curva_oc(n, c, pasos=151):
     return pd.DataFrame({"Fracción defectuosa": ps, "Probabilidad de aceptación": [float(stats.binom.cdf(min(c, n), n, p)) for p in ps]})
 
 
+
+
+def constantes_xbar_s(n):
+    tabla = {
+        2: {"A3": 2.659, "B3": 0.000, "B4": 3.267, "c4": 0.7979},
+        3: {"A3": 1.954, "B3": 0.000, "B4": 2.568, "c4": 0.8862},
+        4: {"A3": 1.628, "B3": 0.000, "B4": 2.266, "c4": 0.9213},
+        5: {"A3": 1.427, "B3": 0.000, "B4": 2.089, "c4": 0.9400},
+        6: {"A3": 1.287, "B3": 0.030, "B4": 1.970, "c4": 0.9515},
+        7: {"A3": 1.182, "B3": 0.118, "B4": 1.882, "c4": 0.9594},
+        8: {"A3": 1.099, "B3": 0.185, "B4": 1.815, "c4": 0.9650},
+        9: {"A3": 1.032, "B3": 0.239, "B4": 1.761, "c4": 0.9693},
+        10: {"A3": 0.975, "B3": 0.284, "B4": 1.716, "c4": 0.9727},
+        11: {"A3": 0.927, "B3": 0.321, "B4": 1.679, "c4": 0.9754},
+        12: {"A3": 0.886, "B3": 0.354, "B4": 1.646, "c4": 0.9776},
+        13: {"A3": 0.850, "B3": 0.382, "B4": 1.618, "c4": 0.9794},
+        14: {"A3": 0.817, "B3": 0.406, "B4": 1.594, "c4": 0.9810},
+        15: {"A3": 0.789, "B3": 0.428, "B4": 1.572, "c4": 0.9823},
+        20: {"A3": 0.680, "B3": 0.510, "B4": 1.490, "c4": 0.9869},
+        25: {"A3": 0.606, "B3": 0.565, "B4": 1.435, "c4": 0.9896},
+    }
+    return tabla.get(int(n))
+
+
+def calcular_xbar_s(df, col_valor, col_subgrupo):
+    if not dataframe_valido(df) or col_valor not in df.columns or col_subgrupo not in df.columns:
+        return None
+    temp = pd.DataFrame({
+        "valor": pd.to_numeric(obtener_columna(df, col_valor), errors="coerce"),
+        "subgrupo": obtener_columna(df, col_subgrupo),
+    }).dropna()
+    if temp.empty:
+        return None
+    resumen = temp.groupby("subgrupo")["valor"].agg(["mean", "std", "count"])
+    resumen = resumen[(resumen["count"] >= 2) & resumen["std"].notna()]
+    if resumen.empty:
+        return None
+    n = int(round(float(resumen["count"].mean())))
+    c = constantes_xbar_s(n)
+    if not c:
+        return None
+    xbb = float(resumen["mean"].mean())
+    sb = float(resumen["std"].mean())
+    limites = {
+        "Tamaño promedio de subgrupo": n,
+        "X doble barra": xbb,
+        "S barra": sb,
+        "A3": c["A3"],
+        "B3": c["B3"],
+        "B4": c["B4"],
+        "c4": c["c4"],
+        "LC Xbarra": xbb,
+        "LCS Xbarra": xbb + c["A3"] * sb,
+        "LCI Xbarra": xbb - c["A3"] * sb,
+        "LC S": sb,
+        "LCS S": c["B4"] * sb,
+        "LCI S": c["B3"] * sb,
+        "Sigma Sbarra/c4": sb / c["c4"],
+    }
+    limites["Puntos fuera Xbarra"] = int(((resumen["mean"] > limites["LCS Xbarra"]) | (resumen["mean"] < limites["LCI Xbarra"])).sum())
+    limites["Puntos fuera S"] = int(((resumen["std"] > limites["LCS S"]) | (resumen["std"] < limites["LCI S"])).sum())
+    return resumen, limites
+
+
+def evaluar_patrones_shewhart(valores, lc, lcs, lci):
+    s = convertir_a_numerica(valores).reset_index(drop=True)
+    if len(s) == 0:
+        return pd.DataFrame(columns=["Regla", "Resultado", "Interpretación"])
+    sigma = (lcs - lc) / 3 if lcs is not None and lc is not None else np.nan
+    fuera = int(((s > lcs) | (s < lci)).sum())
+    filas = [{"Regla": "1 punto fuera de LCI/LCS", "Resultado": fuera, "Interpretación": "Señal directa de causa especial." if fuera else "No se detecta esta señal."}]
+    racha_max = 0
+    racha = 0
+    lado_prev = None
+    for v in s:
+        lado = "arriba" if v > lc else "abajo" if v < lc else "centro"
+        if lado != "centro" and lado == lado_prev:
+            racha += 1
+        elif lado != "centro":
+            racha = 1
+            lado_prev = lado
+        else:
+            racha = 0
+            lado_prev = None
+        racha_max = max(racha_max, racha)
+    filas.append({"Regla": "8 puntos seguidos a un lado de LC", "Resultado": int(racha_max >= 8), "Interpretación": f"Racha máxima observada: {racha_max}."})
+    tendencia = 0
+    if len(s) >= 6:
+        for i in range(len(s) - 5):
+            tramo = s.iloc[i:i+6]
+            dif = tramo.diff().dropna()
+            if (dif > 0).all() or (dif < 0).all():
+                tendencia += 1
+    filas.append({"Regla": "6 puntos consecutivos con tendencia", "Resultado": int(tendencia), "Interpretación": "Indica deriva gradual del proceso." if tendencia else "No se detecta tendencia larga."})
+    dos_de_tres = 0
+    if len(s) >= 3 and sigma > 0:
+        for i in range(len(s) - 2):
+            w = s.iloc[i:i+3]
+            if ((w > lc + 2*sigma).sum() >= 2) or ((w < lc - 2*sigma).sum() >= 2):
+                dos_de_tres += 1
+    filas.append({"Regla": "2 de 3 puntos en zona A", "Resultado": int(dos_de_tres), "Interpretación": "Señal temprana de desplazamiento." if dos_de_tres else "No se detecta esta señal."})
+    cuatro_de_cinco = 0
+    if len(s) >= 5 and sigma > 0:
+        for i in range(len(s) - 4):
+            w = s.iloc[i:i+5]
+            if ((w > lc + sigma).sum() >= 4) or ((w < lc - sigma).sum() >= 4):
+                cuatro_de_cinco += 1
+    filas.append({"Regla": "4 de 5 puntos en zona B o más", "Resultado": int(cuatro_de_cinco), "Interpretación": "Sugiere cambio sostenido." if cuatro_de_cinco else "No se detecta esta señal."})
+    return pd.DataFrame(filas)
+
+
+def calcular_desempeno_grafico_xbarra(media_actual, media_cambio, sigma, n, intervalo=1.0, z=3.0):
+    if sigma <= 0 or n <= 0 or intervalo <= 0:
+        return None
+    d = abs(media_cambio - media_actual) / sigma
+    alpha = 2 * (1 - stats.norm.cdf(abs(z)))
+    beta = float(stats.norm.cdf(abs(z) - d * np.sqrt(n)) - stats.norm.cdf(-abs(z) - d * np.sqrt(n)))
+    beta = min(max(beta, 0.0), 1.0)
+    potencia = 1 - beta
+    arl0 = np.inf if alpha <= 0 else 1 / alpha
+    arl1 = np.inf if potencia <= 0 else 1 / potencia
+    return {
+        "media actual": float(media_actual), "media a detectar": float(media_cambio), "sigma usada": float(sigma), "n": int(n),
+        "intervalo minutos": float(intervalo), "diferencia absoluta": float(abs(media_cambio - media_actual)), "d": float(d),
+        "d√n": float(d * np.sqrt(n)), "Z crítico": float(abs(z)), "Z crítico - d√n": float(abs(z) - d * np.sqrt(n)),
+        "α": float(alpha), "% α": float(alpha * 100), "β": float(beta), "% β": float(beta * 100),
+        "potencia = 1 - β": float(potencia), "% potencia": float(potencia * 100),
+        "ARL0": float(arl0) if np.isfinite(arl0) else np.inf, "ATS0 minutos": float(arl0 * intervalo) if np.isfinite(arl0) else np.inf,
+        "ARL1": float(arl1) if np.isfinite(arl1) else np.inf, "ATS1 minutos": float(arl1 * intervalo) if np.isfinite(arl1) else np.inf,
+    }
+
+
+def n_para_potencia_xbarra(media_actual, media_cambio, sigma, potencia_objetivo, z=3.0):
+    if sigma <= 0 or potencia_objetivo <= 0 or potencia_objetivo >= 1 or media_actual == media_cambio:
+        return None
+    d = abs(media_cambio - media_actual) / sigma
+    z_beta = stats.norm.ppf(potencia_objetivo)
+    return int(np.ceil(((abs(z) + z_beta) / d) ** 2))
+
 # ============================================================
-# 5. INTERFAZ, ESTILO Y GRÁFICOS
+# INTERFAZ Y GRÁFICOS
 # ============================================================
-# Definición de la interfaz visual, estilo y construcción de gráficos
-# Se enfoca en claridad, interpretación y apoyo a la toma de decisiones
 
 def importar_librerias_app():
     if FALTAN_APP:
@@ -881,6 +1138,76 @@ def tabla(st, datos: dict, titulo="Resultados"):
     df.columns = ["Indicador", "Valor"]
     st.dataframe(df, use_container_width=True, hide_index=True)
 
+
+
+def excel_bytes_hojas(hojas: dict) -> bytes:
+    salida = BytesIO()
+    with pd.ExcelWriter(salida, engine="openpyxl") as writer:
+        for nombre, datos in hojas.items():
+            if isinstance(datos, pd.DataFrame):
+                df_export = datos.copy()
+            elif isinstance(datos, dict):
+                df_export = pd.DataFrame([redondear_dict(datos)]).T.reset_index()
+                df_export.columns = ["Indicador", "Valor"]
+            else:
+                df_export = pd.DataFrame(datos)
+            hoja = str(nombre)[:31] if nombre else "Hoja"
+            df_export.to_excel(writer, index=False, sheet_name=hoja)
+    return salida.getvalue()
+
+
+def boton_exportar_excel(st, hojas: dict, nombre_archivo: str, etiqueta: str = "Descargar resultados en Excel"):
+    try:
+        st.download_button(
+            etiqueta,
+            data=excel_bytes_hojas(hojas),
+            file_name=nombre_archivo,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+    except Exception as e:
+        st.warning(f"No se pudo preparar el Excel: {e}")
+
+
+def perfil_datos(df):
+    filas = []
+    if not dataframe_valido(df):
+        return pd.DataFrame()
+    for col in df.columns:
+        serie = df[col]
+        num = pd.to_numeric(serie, errors="coerce")
+        n_num = int(num.notna().sum())
+        filas.append({
+            "Variable": col,
+            "Tipo detectado": "Numérica" if n_num > 0 else "Texto/Categoría",
+            "Datos válidos": int(serie.notna().sum()),
+            "Faltantes": int(serie.isna().sum()),
+            "% faltantes": round(float(serie.isna().mean() * 100), 3),
+            "Valores únicos": int(serie.nunique(dropna=True)),
+            "Media si numérica": float(num.mean()) if n_num else np.nan,
+            "Desv. estándar si numérica": float(num.std(ddof=1)) if n_num > 1 else np.nan,
+        })
+    return pd.DataFrame(filas)
+
+
+def plan_modulos_df():
+    return pd.DataFrame([
+        {"Sección": "Gestión de datos", "Incluye": "Excel/CSV, identificación de variables, subgrupos racionales, limpieza y tablas resumen", "Estado": "Integrado"},
+        {"Sección": "Gráficos de control por variables", "Incluye": "X-barra-R, X-barra-S e I-MR con Fase I y Fase II", "Estado": "Integrado"},
+        {"Sección": "Gráficos de control por atributos", "Incluye": "p, np, c y u con selección según defecto, no conformidad y tamaño muestral", "Estado": "Integrado"},
+        {"Sección": "Validación de supuestos", "Incluye": "Normalidad, independencia, estabilidad, patrones y causas especiales", "Estado": "Integrado"},
+        {"Sección": "Capacidad del proceso", "Incluye": "Cp, Cpk, Cpl, Cpu, PNC, especificaciones y aptitud", "Estado": "Integrado"},
+        {"Sección": "Diseño de gráficos", "Incluye": "ARL0, ARL1, ATS, tamaño de muestra, frecuencia y desplazamiento", "Estado": "Integrado"},
+        {"Sección": "Muestreo de aceptación", "Incluye": "Diseño y validación de planes de muestreo por atributos", "Estado": "Integrado"},
+        {"Sección": "Reportes", "Incluye": "Tablas, gráficos, conclusiones preliminares y exportación de resultados", "Estado": "Integrado"},
+    ])
+
+
+def texto_decision_empresarial(estado, riesgo, pnc_total=None):
+    if estado == "Excelente" or estado == "Capaz":
+        return "El proceso presenta condiciones favorables para producción continua. Se recomienda mantener seguimiento periódico y conservar los parámetros actuales."
+    if pnc_total is not None and pnc_total > 5:
+        return "El proceso requiere intervención prioritaria porque el porcentaje de producto no conforme es alto. Deben revisarse calibración, materia prima, método de operación y variabilidad."
+    return f"El proceso requiere seguimiento técnico. El riesgo principal identificado es {riesgo}; se recomienda ajustar el centrado y controlar la variabilidad antes de liberar producción crítica."
 
 def estilo_fig(fig, titulo, subtitulo=""):
     texto = titulo if not subtitulo else f"{titulo}<br><sup>{subtitulo}</sup>"
@@ -1012,6 +1339,30 @@ def grafico_xbar_r(go, df, col_valor, col_subgrupo):
     return fig_x, fig_r, lim
 
 
+def grafico_xbar_s(go, df, col_valor, col_subgrupo):
+    calc = calcular_xbar_s(df, col_valor, col_subgrupo)
+    if calc is None:
+        return None, None, None
+    resumen, lim = calc
+    fig_x = go.Figure()
+    fig_x.add_trace(go.Scatter(x=resumen.index.astype(str), y=resumen["mean"], mode="lines+markers", name="Media del subgrupo", line=dict(width=3), marker=dict(size=8)))
+    hline(fig_x, lim["LC Xbarra"], "LC X̄", "solid")
+    hline(fig_x, lim["LCS Xbarra"], "LCS X̄")
+    hline(fig_x, lim["LCI Xbarra"], "LCI X̄")
+    fig_x.update_xaxes(title="Subgrupo")
+    fig_x.update_yaxes(title="Media")
+    fig_x = estilo_fig(fig_x, "Carta X-barra", "Control de la media del proceso con carta S")
+    fig_s = go.Figure()
+    fig_s.add_trace(go.Scatter(x=resumen.index.astype(str), y=resumen["std"], mode="lines+markers", name="Desviación estándar", line=dict(width=3), marker=dict(size=8)))
+    hline(fig_s, lim["LC S"], "LC S", "solid")
+    hline(fig_s, lim["LCS S"], "LCS S")
+    hline(fig_s, lim["LCI S"], "LCI S")
+    fig_s.update_xaxes(title="Subgrupo")
+    fig_s.update_yaxes(title="S")
+    fig_s = estilo_fig(fig_s, "Carta S", "Control de la variabilidad dentro del subgrupo")
+    return fig_x, fig_s, lim
+
+
 def grafico_i_mr(go, serie):
     calc = calcular_i_mr(serie)
     if calc is None:
@@ -1068,66 +1419,218 @@ def grafico_oc(go, datos, aql=None, ltpd=None):
     return estilo_fig(fig, "Curva característica de operación", "Riesgo del productor y consumidor")
 
 
+def crear_hoja_vacia(filas: int = 25, columnas_medicion: int = 5) -> pd.DataFrame:
+    """Crea una hoja editable en formato ancho: filas=subgrupos y columnas=mediciones."""
+    filas = max(1, int(filas))
+    columnas_medicion = max(1, int(columnas_medicion))
+    datos = {"#MUESTRAS": list(range(1, filas + 1))}
+    for i in range(1, columnas_medicion + 1):
+        datos[str(i)] = [np.nan] * filas
+    return pd.DataFrame(datos)
+
+
+def ajustar_dimension_hoja(df: pd.DataFrame, filas: int, columnas_medicion: int) -> pd.DataFrame:
+    """Ajusta la hoja editable al número solicitado de filas y columnas sin perder datos existentes cuando sea posible."""
+    filas = max(1, int(filas))
+    columnas_medicion = max(1, int(columnas_medicion))
+    columnas_objetivo = ["#MUESTRAS"] + [str(i) for i in range(1, columnas_medicion + 1)]
+    salida = pd.DataFrame(index=range(filas), columns=columnas_objetivo)
+    salida["#MUESTRAS"] = list(range(1, filas + 1))
+    if df is not None and isinstance(df, pd.DataFrame) and not df.empty:
+        df_temp = df.copy().reset_index(drop=True)
+        for col in columnas_objetivo:
+            if col in df_temp.columns:
+                limite = min(filas, len(df_temp))
+                salida.loc[:limite - 1, col] = df_temp.loc[:limite - 1, col].values
+        salida["#MUESTRAS"] = salida["#MUESTRAS"].fillna(pd.Series(range(1, filas + 1)))
+    return salida
+
+
+def dataframe_hoja_ejemplo() -> pd.DataFrame:
+    """Datos de prueba en formato ancho para validar cartas X-barra/R."""
+    return pd.DataFrame({
+        "#MUESTRAS": list(range(1, 26)),
+        "1": [308.1,302.6,300.3,307.9,308.9,302.2,302.4,305.7,306.2,312.1,302.7,313.2,302.6,299.1,301.3,307.1,315.5,301.8,304.8,305.1,309.6,306.7,303.1,298.2,310.4],
+        "2": [304.8,305.3,301.3,308.8,307.0,310.3,302.7,316.0,306.9,308.9,303.6,304.5,297.8,299.8,304.9,312.6,299.5,309.3,294.5,302.1,298.5,300.9,310.6,307.2,304.5],
+        "3": [294.8,299.1,300.8,304.6,304.9,301.8,304.0,307.1,304.1,313.5,299.1,299.4,306.0,301.5,304.2,305.4,310.4,300.3,314.0,307.6,306.7,304.9,303.5,308.9,303.5],
+        "4": [296.6,308.9,305.4,306.7,306.3,301.4,298.2,310.7,312.4,306.8,303.9,311.2,309.1,307.5,303.3,305.8,306.8,307.1,304.0,303.5,307.2,297.1,297.6,311.9,293.4],
+        "5": [309.1,309.0,305.1,309.5,304.7,300.6,303.8,309.4,300.8,307.1,302.3,310.0,304.7,304.8,302.8,319.1,315.0,306.2,312.1,307.5,301.0,306.6,309.1,303.5,299.6],
+    })
+
+
+def normalizar_decimales_coma(df: pd.DataFrame) -> pd.DataFrame:
+    """Convierte valores con coma decimal a números cuando sea posible."""
+    salida = df.copy()
+    for col in salida.columns:
+        if salida[col].dtype == object:
+            serie = salida[col].astype(str).str.strip().str.replace(".", "", regex=False).str.replace(",", ".", regex=False)
+            convertida = pd.to_numeric(serie, errors="coerce")
+            if convertida.notna().sum() > 0:
+                salida[col] = convertida
+    return salida
+
+
+def convertir_hoja_ancha_a_largo(df: pd.DataFrame, columna_subgrupo: str) -> pd.DataFrame:
+    """Convierte tabla tipo Excel: filas=subgrupos, columnas=mediciones, a formato largo."""
+    temp = normalizar_decimales_coma(df).dropna(how="all").copy()
+    if columna_subgrupo not in temp.columns:
+        raise ValueError("La columna de subgrupo no existe.")
+    columnas_medicion = [c for c in temp.columns if c != columna_subgrupo]
+    temp = temp.melt(id_vars=columna_subgrupo, value_vars=columnas_medicion, var_name="medicion_id", value_name="medicion")
+    temp = temp.rename(columns={columna_subgrupo: "subgrupo"})
+    temp["medicion"] = pd.to_numeric(temp["medicion"], errors="coerce")
+    temp = temp.dropna(subset=["medicion"])
+    return normalizar_nombres_columnas(temp)
+
+
+
 # ============================================================
-# 6. PANTALLAS O MÓDULOS DE LA APLICACIÓN
+# PANTALLAS
 # ============================================================
-# Cada función representa un módulo funcional de la aplicación
-# Diseñado para cubrir el flujo completo de análisis en control estadístico
 
 def pantalla_inicio(st):
-    tarjetas(st, {"Estado": "Listo", "Enfoque": "Control estadístico", "Modo": "Interactivo", "Creador": "Jerson López"}, "Panel principal")
-    st.markdown("### Ruta de análisis")
-    c1, c2, c3 = st.columns(3)
+    tarjetas(st, {"Estado": "Listo", "Enfoque": "CEP / SPC", "Secciones": 8, "Creador": "Jerson López"}, "Panel principal")
+    caja_estado(st, "info", "Pulso de Calidad SPC integra gestión de datos, gráficos de control, supuestos, capacidad, diseño ARL/ATS, muestreo de aceptación y reportes. Está organizado según el alcance técnico del trabajo final.")
+
+    st.markdown("### Mapa de módulos del software")
+    modulos = plan_modulos_df()
+    st.dataframe(modulos, use_container_width=True, hide_index=True)
+    boton_exportar_excel(st, {"Mapa de secciones": modulos}, "mapa_secciones_pulso_calidad.xlsx", "Descargar mapa de secciones")
+
+    st.markdown("### Ruta recomendada de análisis")
+    c1, c2, c3, c4 = st.columns(4)
     with c1:
-        caja_estado(st, "info", "1. Carga datos y define la variable crítica de calidad.")
-        caja_estado(st, "info", "2. Valida normalidad, independencia, homocedasticidad y atípicos.")
+        caja_estado(st, "info", "1. Carga, limpia y caracteriza los datos.")
+        caja_estado(st, "info", "2. Define variable crítica y subgrupos racionales.")
     with c2:
-        caja_estado(st, "info", "3. Selecciona la carta correcta: I-MR, X-barra/R, p, np, c o u.")
-        caja_estado(st, "info", "4. Evalúa Cp, Cpk, Pp, Ppk, PNC y escenarios de mejora.")
+        caja_estado(st, "info", "3. Valida supuestos y estabilidad preliminar.")
+        caja_estado(st, "info", "4. Construye cartas en Fase I y monitorea en Fase II.")
     with c3:
-        caja_estado(st, "info", "5. Revisa no conformes y riesgos por LIE o LSE.")
-        caja_estado(st, "info", "6. Exporta reporte y usa monitoreo para seguimiento continuo.")
+        caja_estado(st, "info", "5. Evalúa capacidad, PNC y aptitud del proceso.")
+        caja_estado(st, "info", "6. Diseña ARL/ATS y plan de muestreo.")
+    with c4:
+        caja_estado(st, "info", "7. Genera conclusiones con juicio de ingeniería.")
+        caja_estado(st, "info", "8. Exporta resultados para informe y anexos.")
+
     st.markdown("### Diccionario de conceptos")
     dic = pd.DataFrame({
-        "Sigla": ["VN", "LIE", "LSE", "Cp", "CPU", "CPL", "Cpk", "PNC", "ARL", "ATS"],
-        "Nombre completo": ["Valor nominal u objetivo", "Límite inferior de especificación", "Límite superior de especificación", "Capacidad potencial", "Capacidad hacia LSE", "Capacidad hacia LIE", "Capacidad real", "Producto no conforme", "Promedio de muestras hasta señal", "Tiempo promedio hasta señal"],
+        "Sigla": ["VN", "LIE", "LSE", "Cp", "CPU", "CPL", "Cpk", "PNC", "ARL0", "ARL1", "ATS"],
+        "Nombre completo": ["Valor nominal u objetivo", "Límite inferior de especificación", "Límite superior de especificación", "Capacidad potencial", "Capacidad hacia LSE", "Capacidad hacia LIE", "Capacidad real", "Producto no conforme", "Muestras promedio hasta falsa alarma", "Muestras promedio hasta detectar cambio", "Tiempo promedio hasta señal"],
     })
     st.dataframe(dic, use_container_width=True, hide_index=True)
+    boton_exportar_excel(st, {"Diccionario": dic}, "diccionario_spc.xlsx", "Descargar diccionario")
 
 
 def pantalla_cargar_datos(st):
-    st.markdown("### Cargar datos")
-    archivo = st.file_uploader("Sube un archivo CSV o Excel", type=["csv", "xlsx"])
-    if archivo is not None:
-        try:
-            df = cargar_datos_desde_archivo(archivo)
-            st.session_state["df"] = df
-            st.session_state["df_original"] = df.copy()
-            st.success("Datos cargados correctamente.")
-        except Exception as e:
-            st.error(f"Error al cargar archivo: {e}")
-    texto = st.text_area("O pega datos en formato CSV", height=130, placeholder="subgrupo,medicion\n1,10.1\n1,9.9")
-    if st.button("Cargar datos manuales"):
-        try:
-            df = normalizar_nombres_columnas(pd.read_csv(StringIO(texto)))
-            st.session_state["df"] = df
-            st.session_state["df_original"] = df.copy()
-            st.success("Datos manuales cargados.")
-        except Exception as e:
-            st.error(f"No se pudieron cargar los datos: {e}")
-    df = st.session_state.get("df")
-    if dataframe_valido(df):
-        tarjetas(st, {"Filas": len(df), "Columnas": len(df.columns), "Numéricas": len(columnas_numericas(df)), "Faltantes": int(df.isna().sum().sum())}, "Resumen del archivo")
-        st.dataframe(df.head(40), use_container_width=True, hide_index=True)
-        with st.expander("Convertir formato ancho a formato largo"):
-            col_sub = st.selectbox("Columna que identifica el subgrupo", df.columns.tolist())
-            if st.button("Convertir"):
-                st.session_state["df"] = convertir_ancho_a_largo(df, col_sub)
-                st.success("Datos convertidos a formato largo.")
-                st.dataframe(st.session_state["df"], use_container_width=True, hide_index=True)
-        st.markdown("### Resumen estadístico")
-        st.dataframe(df.describe(include="all").T.reset_index().rename(columns={"index": "Variable"}), use_container_width=True, hide_index=True)
+    st.markdown("### Gestión de datos")
+    caja_estado(st, "info", "Carga datos desde Excel o CSV, pega una tabla en formato CSV, limpia el archivo, identifica variables y define subgrupos racionales para el análisis.")
 
+    tab_archivo, tab_resumen = st.tabs(["Cargar datos", "Resumen, limpieza y subgrupos"])
+
+    with tab_archivo:
+        st.markdown("#### Carga de archivo")
+        archivo = st.file_uploader("Sube un archivo CSV o Excel", type=["csv", "xlsx"], key="archivo_principal")
+        if archivo is not None:
+            try:
+                df = normalizar_decimales_coma(cargar_datos_desde_archivo(archivo))
+                st.session_state["df"] = df
+                st.session_state["df_original"] = df.copy()
+                actualizar_parametros_desde_df(st, df)
+                st.success("Datos cargados correctamente.")
+                st.dataframe(df.head(80), use_container_width=True, hide_index=True)
+            except Exception as e:
+                st.error(f"Error al cargar archivo: {e}")
+
+        st.markdown("#### Carga manual en formato CSV")
+        caja_estado(st, "info", "Pega una tabla con encabezados. Se aceptan separadores por coma o punto y coma. Para decimales con coma, la app realiza conversión automática cuando es posible.")
+        texto = st.text_area(
+            "Pega datos con encabezados",
+            height=170,
+            placeholder="subgrupo;medicion_1;medicion_2;medicion_3\n1;308,1;304,8;294,8\n2;302,6;305,3;299,1",
+            key="texto_csv_principal",
+        )
+        sep = st.radio("Separador del texto pegado", ["Automático", "Coma (,)", "Punto y coma (;)", "Tabulación"], horizontal=True, key="sep_texto_manual")
+        if st.button("Cargar datos pegados", key="btn_cargar_csv_pegado"):
+            try:
+                if sep == "Coma (,)":
+                    separador = ","
+                elif sep == "Punto y coma (;)":
+                    separador = ";"
+                elif sep == "Tabulación":
+                    separador = "\t"
+                else:
+                    separador = None
+
+                if sep == "Coma (,)":
+                    df = pd.read_csv(StringIO(texto), sep=",")
+                elif sep == "Punto y coma (;)":
+                    df = pd.read_csv(StringIO(texto), sep=";")
+                elif sep == "Tabulación":
+                    df = pd.read_csv(StringIO(texto), sep="\t")
+                else:
+                    try:
+                        df = pd.read_csv(StringIO(texto), sep=None, engine="python")
+                    except Exception:
+                        df = pd.read_csv(StringIO(texto))
+
+                df = normalizar_decimales_coma(normalizar_nombres_columnas(df))
+                st.session_state["df"] = df
+                st.session_state["df_original"] = df.copy()
+                actualizar_parametros_desde_df(st, df)
+                st.success("Datos pegados cargados correctamente.")
+                st.dataframe(df.head(80), use_container_width=True, hide_index=True)
+            except Exception as e:
+                st.error(f"No se pudieron cargar los datos: {e}")
+
+    with tab_resumen:
+        df = st.session_state.get("df")
+        if not dataframe_valido(df):
+            st.warning("Primero carga datos desde archivo o desde texto CSV.")
+            return
+        panel_parametros_activos(st)
+        tarjetas(st, {"Filas": len(df), "Columnas": len(df.columns), "Numéricas": len(columnas_numericas(df)), "Faltantes": int(df.isna().sum().sum())}, "Resumen del archivo")
+        st.dataframe(df.head(80), use_container_width=True, hide_index=True)
+        with st.expander("Convertir formato ancho a formato largo"):
+            caja_estado(st, "info", "Usa esta opción cuando tus datos vienen con una fila por subgrupo y varias columnas de medición. El resultado queda como: subgrupo, medicion_id y medicion.")
+            col_sub_conv = st.selectbox("Columna que identifica el subgrupo", df.columns.tolist(), key="conv_col_subgrupo")
+            if st.button("Convertir", key="btn_convertir_ancho_largo"):
+                try:
+                    st.session_state["df"] = convertir_hoja_ancha_a_largo(df, col_sub_conv)
+                    actualizar_parametros_desde_df(st, st.session_state["df"])
+                    st.success("Datos convertidos a formato largo.")
+                    st.dataframe(st.session_state["df"], use_container_width=True, hide_index=True)
+                except Exception as e:
+                    st.error(f"No se pudo convertir: {e}")
+        st.markdown("### Resumen estadístico")
+        resumen_general = df.describe(include="all").T.reset_index().rename(columns={"index": "Variable"})
+        st.dataframe(resumen_general, use_container_width=True, hide_index=True)
+        st.markdown("### Perfil de variables y limpieza")
+        perfil = perfil_datos(df)
+        st.dataframe(perfil, use_container_width=True, hide_index=True)
+        c_limp1, c_limp2, c_limp3 = st.columns(3)
+        with c_limp1:
+            if st.button("Limpiar filas vacías", key="btn_limpiar_filas"):
+                st.session_state["df"] = df.dropna(how="all").copy()
+                actualizar_parametros_desde_df(st, st.session_state["df"])
+                st.success("Filas vacías eliminadas.")
+                st.rerun()
+        with c_limp2:
+            if st.button("Eliminar duplicados exactos", key="btn_duplicados"):
+                st.session_state["df"] = df.drop_duplicates().copy()
+                actualizar_parametros_desde_df(st, st.session_state["df"])
+                st.success("Duplicados exactos eliminados.")
+                st.rerun()
+        with c_limp3:
+            boton_exportar_excel(st, {"Datos": df, "Perfil": perfil, "Resumen": resumen_general}, "gestion_datos_resumen.xlsx")
+        st.markdown("### Definición de subgrupos racionales")
+        caja_estado(st, "info", "Un subgrupo racional reúne mediciones tomadas bajo condiciones similares. Úsalo para cartas X-barra/R o X-barra/S. Si no hay subgrupos, usa I-MR.")
+        cols_sub = ["Ninguno"] + df.columns.tolist()
+        sub_sugerido = "subgrupo" if "subgrupo" in df.columns else cols_sub[0]
+        sub_def = selectbox_persistente(st, "Columna sugerida de subgrupo", cols_sub, "datos_subgrupo_racional", sub_sugerido)
+        if sub_def != "Ninguno":
+            conteo_sub = df.groupby(sub_def).size().reset_index(name="Tamaño del subgrupo")
+            st.dataframe(conteo_sub.head(50), use_container_width=True, hide_index=True)
+            boton_exportar_excel(st, {"Subgrupos": conteo_sub}, "subgrupos_racionales.xlsx", "Descargar subgrupos")
 
 def pantalla_supuestos(st, go):
     df = st.session_state.get("df")
@@ -1175,104 +1678,287 @@ def pantalla_supuestos(st, go):
         if len(atip) > 0:
             st.dataframe(atip.reset_index(), use_container_width=True, hide_index=True)
 
+    try:
+        sup_export = {
+            "Resumen": pd.DataFrame([resumen_descriptivo(s)]).T.reset_index().rename(columns={"index": "Indicador", 0: "Valor"}),
+            "Normalidad": evaluar_normalidad(s),
+            "Independencia": pd.DataFrame([evaluar_independencia(s)]),
+            "Atípicos": atip.reset_index() if 'atip' in locals() else pd.DataFrame(),
+        }
+        boton_exportar_excel(st, sup_export, "validacion_supuestos.xlsx", "Descargar validación de supuestos")
+    except Exception:
+        pass
+
+
+def _tabla_patrones_control(valores, lc, lcs, lci):
+    try:
+        return evaluar_patrones_shewhart(valores, lc, lcs, lci)
+    except Exception:
+        return reglas_shewhart(valores, lc, lcs, lci)
+
+
+def _graficar_fase_ii_linea(go, x, y, lc, lcs, lci, titulo, subtitulo, ytitle="Valor"):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=x, y=y, mode="lines+markers", name="Datos Fase II", line=dict(width=3), marker=dict(size=8)))
+    hline(fig, lc, "LC Fase I", "solid")
+    hline(fig, lcs, "LCS Fase I", "dash")
+    hline(fig, lci, "LCI Fase I", "dash")
+    fig.update_xaxes(title="Muestra / subgrupo")
+    fig.update_yaxes(title=ytitle)
+    return estilo_fig(fig, titulo, subtitulo)
+
+
+def _mostrar_resumen_fase(st, lim, titulo):
+    datos = {k: v for k, v in lim.items() if isinstance(v, (int, float, np.integer, np.floating, str))}
+    tarjetas(st, datos, titulo)
+
+
+def _leer_datos_fase_ii(st):
+    df_base = st.session_state.get("df")
+    st.markdown("##### Entrada de datos nuevos para Fase II")
+    caja_estado(st, "info", "En Fase II se cargan datos nuevos del proceso. La app usa los límites guardados de Fase I y no recalcula los límites base.")
+    archivo = st.file_uploader("Cargar nuevos datos Fase II desde Excel o CSV", type=["xlsx", "csv"], key="fase2_archivo_nuevo")
+    texto = st.text_area(
+        "O pega datos nuevos en formato CSV",
+        height=110,
+        placeholder="subgrupo,medicion\n26,304.2\n26,305.1\n27,306.0",
+        key="fase2_csv_manual",
+    )
+    usar_base = st.checkbox("Usar los mismos datos cargados como práctica de monitoreo", value=False, key="fase2_usar_base")
+
+    df2 = None
+    if archivo is not None:
+        try:
+            df2 = cargar_datos_desde_archivo(archivo)
+            st.success("Datos nuevos de Fase II cargados desde archivo.")
+        except Exception as e:
+            st.error(f"No se pudieron leer los datos nuevos del archivo: {e}")
+            return None
+    elif texto.strip():
+        try:
+            df2 = normalizar_nombres_columnas(pd.read_csv(StringIO(texto)))
+            st.success("Datos nuevos de Fase II cargados desde texto.")
+        except Exception as e:
+            st.error(f"No se pudieron leer los datos nuevos: {e}")
+            return None
+    elif usar_base:
+        df2 = df_base.copy() if dataframe_valido(df_base) else None
+
+    if dataframe_valido(df2):
+        st.caption("Vista previa de datos nuevos Fase II")
+        st.dataframe(df2.head(25), use_container_width=True, hide_index=True)
+        boton_exportar_excel(st, {"Datos Fase II": df2, "Perfil Fase II": perfil_datos(df2)}, "datos_fase_ii.xlsx", "Descargar datos Fase II")
+        return df2
+    return None
+
 
 def pantalla_control(st, go):
+    st.markdown("### Gráficos de control por Fase I y Fase II")
+    caja_estado(
+        st,
+        "info",
+        "Este módulo está separado explícitamente en Fase I y Fase II. Primero se estiman límites con datos históricos. Luego se usan esos límites fijos para monitorear datos nuevos."
+    )
+
+    modo = radio_persistente(
+        st,
+        "Selecciona la fase de trabajo",
+        ["Fase I: estimar límites", "Fase II: monitorear con límites de Fase I", "Vista completa"],
+        "ctrl_modo_fase",
+        "Vista completa",
+        horizontal=True,
+    )
+
+    c_f1, c_f2 = st.columns(2)
+    with c_f1:
+        caja_estado(st, "ok", "Fase I: usa datos históricos, calcula LC, LCS y LCI, revisa estabilidad y permite guardar los límites base.")
+    with c_f2:
+        caja_estado(st, "info", "Fase II: usa límites guardados de Fase I, evalúa nuevas muestras y genera alertas sin recalcular los límites base.")
+
     df = st.session_state.get("df")
     if not dataframe_valido(df):
-        st.warning("Primero carga datos.")
+        st.warning("Primero carga datos en el módulo Cargar datos. La selección de Fase I/Fase II ya está activa aquí.")
         return
     nums = columnas_numericas(df)
     if not nums:
         st.error("No hay columnas numéricas.")
         return
 
+    filtro = st.session_state.get("filtro_control_tipo", "todos")
+    if filtro == "variables":
+        opciones_carta = ["I-MR", "X-barra y R", "X-barra y S"]
+        caja_estado(st, "info", "Selección justificada: usa I-MR para mediciones individuales; X-barra/R para subgrupos de 2 a 10; X-barra/S para subgrupos mayores o cuando interesa controlar la desviación estándar.")
+    elif filtro == "atributos":
+        opciones_carta = ["p", "np", "c", "u"]
+        caja_estado(st, "info", "Selección justificada: p para proporción no conforme con n variable; np para número no conforme con n constante; c para defectos con oportunidad constante; u para defectos por unidad con oportunidad variable.")
+    else:
+        opciones_carta = ["I-MR", "X-barra y R", "X-barra y S", "p", "np", "c", "u"]
+
+    valor_defecto_carta = st.session_state.get("ctrl_tipo", opciones_carta[0])
+    if valor_defecto_carta not in opciones_carta:
+        valor_defecto_carta = opciones_carta[0]
     tipo = radio_persistente(
         st,
-        "Carta de control",
-        ["I-MR", "X-barra y R", "p", "np", "c", "u"],
+        "Tipo de carta",
+        opciones_carta,
         "ctrl_tipo",
-        "I-MR",
+        valor_defecto_carta,
         horizontal=True,
     )
 
+    def guardar_limites(nombre, lim):
+        st.session_state[nombre] = lim
+        caja_estado(st, "ok", "Límites de Fase I guardados. Ya puedes usarlos en Fase II.")
+
     if tipo == "I-MR":
         col = selectbox_persistente(st, "Variable continua", nums, "ctrl_imr_variable", nums[0])
-        fig_i, fig_mr, lim = grafico_i_mr(go, obtener_columna(df, col))
-        if fig_i is None:
+        calc = calcular_i_mr(obtener_columna(df, col))
+        if calc is None:
             st.error("No se pudo calcular I-MR. Revisa que haya variación y al menos 3 datos.")
             return
-        tarjetas(st, lim, "Límites I-MR")
-        t1, t2, t3 = st.tabs(["Carta I", "Carta MR", "Reglas"])
-        with t1:
-            st.plotly_chart(fig_i, use_container_width=True, key="control_imr_i")
-        with t2:
-            st.plotly_chart(fig_mr, use_container_width=True, key="control_imr_mr")
-        with t3:
-            st.dataframe(reglas_shewhart(convertir_a_numerica(obtener_columna(df, col)), lim["LC I"], lim["LCS I"], lim["LCI I"]), use_container_width=True, hide_index=True)
+        s_val, mr, lim = calc
+        if modo in ["Fase I: estimar límites", "Vista completa"]:
+            fig_i, fig_mr, _ = grafico_i_mr(go, obtener_columna(df, col))
+            _mostrar_resumen_fase(st, lim, "Fase I: límites estimados I-MR")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.plotly_chart(fig_i, use_container_width=True, key="fase1_imr_i")
+            with c2:
+                st.plotly_chart(fig_mr, use_container_width=True, key="fase1_imr_mr")
+            st.dataframe(_tabla_patrones_control(s_val, lim["LC I"], lim["LCS I"], lim["LCI I"]), use_container_width=True, hide_index=True)
+            if st.button("Guardar límites I-MR para Fase II"):
+                guardar_limites("lim_fase1_imr", lim)
+        if modo in ["Fase II: monitorear con límites de Fase I", "Vista completa"]:
+            st.markdown("#### Fase II: monitoreo I-MR")
+            lim2 = st.session_state.get("lim_fase1_imr", lim)
+            df2 = _leer_datos_fase_ii(st)
+            if dataframe_valido(df2) and col in df2.columns:
+                s2 = convertir_a_numerica(obtener_columna(df2, col)).reset_index(drop=True)
+                if len(s2) >= 1:
+                    fig2 = _graficar_fase_ii_linea(go, s2.index + 1, s2, lim2["LC I"], lim2["LCS I"], lim2["LCI I"], "Fase II - Carta I", "Límites fijos estimados en Fase I", col)
+                    st.plotly_chart(fig2, use_container_width=True, key="fase2_imr_i")
+                    fuera = int(((s2 > lim2["LCS I"]) | (s2 < lim2["LCI I"])).sum())
+                    tarjetas(st, {"Puntos monitoreados": len(s2), "Puntos fuera": fuera, "Estado": "Alerta" if fuera else "Sin señal"}, "Resultado Fase II")
+                    st.dataframe(_tabla_patrones_control(s2, lim2["LC I"], lim2["LCS I"], lim2["LCI I"]), use_container_width=True, hide_index=True)
+            else:
+                caja_estado(st, "alerta", "Para Fase II pega datos nuevos con la misma columna de medición o activa el uso de datos cargados.")
 
-    elif tipo == "X-barra y R":
+    elif tipo in ["X-barra y R", "X-barra y S"]:
         col = selectbox_persistente(st, "Variable continua", nums, "ctrl_xbar_variable", nums[0])
-        sub = selectbox_persistente(st, "Subgrupo", df.columns.tolist(), "ctrl_xbar_subgrupo", df.columns.tolist()[0])
-        fig_x, fig_r, lim = grafico_xbar_r(go, df, col, sub)
-        if fig_x is None:
-            st.error("No se pudo calcular X-barra/R. Revisa que cada subgrupo tenga de 2 a 10 datos.")
+        sub = selectbox_persistente(st, "Subgrupo racional", df.columns.tolist(), "ctrl_xbar_subgrupo", df.columns.tolist()[0])
+        usa_s = tipo == "X-barra y S"
+        calc = calcular_xbar_s(df, col, sub) if usa_s else calcular_xbar_r(df, col, sub)
+        if calc is None:
+            st.error("No se pudo calcular la carta. Revisa que cada subgrupo tenga datos suficientes y tamaño compatible.")
             return
-        tarjetas(st, lim, "Límites X-barra/R")
-        calc = calcular_xbar_r(df, col, sub)
-        resumen = calc[0]
-        t1, t2, t3, t4 = st.tabs(["Carta X-barra", "Carta R", "Subgrupos", "Reglas"])
-        with t1:
-            st.plotly_chart(fig_x, use_container_width=True, key="control_xbar")
-        with t2:
-            st.plotly_chart(fig_r, use_container_width=True, key="control_r")
-        with t3:
+        resumen, lim = calc
+        nombre_estado = "lim_fase1_xbars" if usa_s else "lim_fase1_xbarr"
+        if modo in ["Fase I: estimar límites", "Vista completa"]:
+            fig_x, fig_v, _ = grafico_xbar_s(go, df, col, sub) if usa_s else grafico_xbar_r(go, df, col, sub)
+            _mostrar_resumen_fase(st, lim, f"Fase I: límites estimados {tipo}")
+            c1, c2 = st.columns(2)
+            with c1:
+                st.plotly_chart(fig_x, use_container_width=True, key=f"fase1_{tipo}_x")
+            with c2:
+                st.plotly_chart(fig_v, use_container_width=True, key=f"fase1_{tipo}_v")
+            st.markdown("#### Subgrupos usados en Fase I")
             st.dataframe(resumen.reset_index(), use_container_width=True, hide_index=True)
-        with t4:
-            st.dataframe(reglas_shewhart(resumen["mean"], lim["LC Xbarra"], lim["LCS Xbarra"], lim["LCI Xbarra"]), use_container_width=True, hide_index=True)
+            st.markdown("#### Reglas sobre la carta de medias")
+            st.dataframe(_tabla_patrones_control(resumen["mean"], lim["LC Xbarra"], lim["LCS Xbarra"], lim["LCI Xbarra"]), use_container_width=True, hide_index=True)
+            if st.button(f"Guardar límites {tipo} para Fase II"):
+                guardar_limites(nombre_estado, lim)
+        if modo in ["Fase II: monitorear con límites de Fase I", "Vista completa"]:
+            st.markdown(f"#### Fase II: monitoreo {tipo}")
+            lim2 = st.session_state.get(nombre_estado, lim)
+            df2 = _leer_datos_fase_ii(st)
+            if dataframe_valido(df2) and col in df2.columns and sub in df2.columns:
+                temp = pd.DataFrame({"valor": pd.to_numeric(obtener_columna(df2, col), errors="coerce"), "subgrupo": obtener_columna(df2, sub)}).dropna()
+                if not temp.empty:
+                    res2 = temp.groupby("subgrupo")["valor"].agg(["mean", "max", "min", "std", "count"])
+                    res2 = res2[res2["count"] >= 2]
+                    if not res2.empty:
+                        res2["R"] = res2["max"] - res2["min"]
+                        fig2 = _graficar_fase_ii_linea(go, res2.index.astype(str), res2["mean"], lim2["LC Xbarra"], lim2["LCS Xbarra"], lim2["LCI Xbarra"], "Fase II - Carta X-barra", "Límites fijos estimados en Fase I", "Media")
+                        st.plotly_chart(fig2, use_container_width=True, key=f"fase2_{tipo}_x")
+                        fuera = int(((res2["mean"] > lim2["LCS Xbarra"]) | (res2["mean"] < lim2["LCI Xbarra"])).sum())
+                        tarjetas(st, {"Subgrupos monitoreados": len(res2), "Puntos fuera X-barra": fuera, "Estado": "Alerta" if fuera else "Sin señal"}, "Resultado Fase II")
+                        st.dataframe(res2.reset_index(), use_container_width=True, hide_index=True)
+            else:
+                caja_estado(st, "alerta", "Para Fase II pega datos nuevos con las mismas columnas de variable y subgrupo.")
 
-    elif tipo == "p":
-        dcol = selectbox_persistente(st, "Defectuosos", nums, "ctrl_p_defectuosos", nums[0])
-        ncol = selectbox_persistente(st, "Inspeccionados", nums, "ctrl_p_inspeccionados", nums[0])
-        calc = calcular_p(df, dcol, ncol)
+    elif tipo in ["p", "np"]:
+        dcol = selectbox_persistente(st, "Unidades defectuosas / no conformes", nums, f"ctrl_{tipo}_defectuosos", nums[0])
+        ncol = selectbox_persistente(st, "Unidades inspeccionadas", nums, f"ctrl_{tipo}_inspeccionados", nums[0])
+        calc = calcular_p(df, dcol, ncol) if tipo == "p" else calcular_np(df, dcol, ncol)
         if calc is None:
-            st.error("No se pudo calcular p.")
+            st.error(f"No se pudo calcular carta {tipo}.")
             return
         temp, lim = calc
-        tarjetas(st, lim, "Carta p")
-        st.plotly_chart(grafico_lineas_atributos(go, temp.index + 1, temp["p"], lim["p barra"], temp["LCS"], temp["LCI"], "Carta p", "Proporción no conforme"), use_container_width=True, key="control_p")
+        if modo in ["Fase I: estimar límites", "Vista completa"]:
+            _mostrar_resumen_fase(st, lim, f"Fase I: carta {tipo}")
+            if tipo == "p":
+                st.plotly_chart(grafico_lineas_atributos(go, temp.index + 1, temp["p"], lim["p barra"], temp["LCS"], temp["LCI"], "Carta p - Fase I", "Proporción no conforme"), use_container_width=True, key="fase1_p")
+            else:
+                st.plotly_chart(grafico_lineas_atributos(go, temp.index + 1, temp["def"], lim["LC np"], lim["LCS np"], lim["LCI np"], "Carta np - Fase I", "Número de unidades no conformes"), use_container_width=True, key="fase1_np")
+            if st.button(f"Guardar límites carta {tipo} para Fase II"):
+                guardar_limites(f"lim_fase1_{tipo}", lim)
+        if modo in ["Fase II: monitorear con límites de Fase I", "Vista completa"]:
+            st.markdown(f"#### Fase II: monitoreo carta {tipo}")
+            lim2 = st.session_state.get(f"lim_fase1_{tipo}", lim)
+            df2 = _leer_datos_fase_ii(st)
+            if dataframe_valido(df2) and dcol in df2.columns and ncol in df2.columns:
+                calc2 = calcular_p(df2, dcol, ncol) if tipo == "p" else calcular_np(df2, dcol, ncol)
+                if calc2:
+                    temp2, _ = calc2
+                    if tipo == "p":
+                        pbar = lim2["p barra"]
+                        temp2["LCS_FaseI"] = (pbar + 3 * np.sqrt(pbar * (1 - pbar) / temp2["n"])).clip(upper=1)
+                        temp2["LCI_FaseI"] = (pbar - 3 * np.sqrt(pbar * (1 - pbar) / temp2["n"])).clip(lower=0)
+                        st.plotly_chart(grafico_lineas_atributos(go, temp2.index + 1, temp2["p"], pbar, temp2["LCS_FaseI"], temp2["LCI_FaseI"], "Carta p - Fase II", "Límites fijos de Fase I"), use_container_width=True, key="fase2_p")
+                        fuera = int(((temp2["p"] > temp2["LCS_FaseI"]) | (temp2["p"] < temp2["LCI_FaseI"])).sum())
+                    else:
+                        st.plotly_chart(grafico_lineas_atributos(go, temp2.index + 1, temp2["def"], lim2["LC np"], lim2["LCS np"], lim2["LCI np"], "Carta np - Fase II", "Límites fijos de Fase I"), use_container_width=True, key="fase2_np")
+                        fuera = int(((temp2["def"] > lim2["LCS np"]) | (temp2["def"] < lim2["LCI np"])).sum())
+                    tarjetas(st, {"Muestras monitoreadas": len(temp2), "Puntos fuera": fuera, "Estado": "Alerta" if fuera else "Sin señal"}, "Resultado Fase II")
+                    st.dataframe(temp2.reset_index(), use_container_width=True, hide_index=True)
 
-    elif tipo == "np":
-        dcol = selectbox_persistente(st, "Defectuosos", nums, "ctrl_np_defectuosos", nums[0])
-        ncol = selectbox_persistente(st, "Inspeccionados", nums, "ctrl_np_inspeccionados", nums[0])
-        calc = calcular_np(df, dcol, ncol)
+    elif tipo in ["c", "u"]:
+        dcol = selectbox_persistente(st, "Defectos", nums, f"ctrl_{tipo}_defectos", nums[0])
+        ncol = None
+        if tipo == "u":
+            ncol = selectbox_persistente(st, "Unidades u oportunidades inspeccionadas", nums, "ctrl_u_unidades", nums[0])
+        calc = calcular_c(df, dcol) if tipo == "c" else calcular_u(df, dcol, ncol)
         if calc is None:
-            st.error("No se pudo calcular np.")
+            st.error(f"No se pudo calcular carta {tipo}.")
             return
         temp, lim = calc
-        tarjetas(st, lim, "Carta np")
-        st.plotly_chart(grafico_lineas_atributos(go, temp.index + 1, temp["def"], lim["LC np"], lim["LCS np"], lim["LCI np"], "Carta np", "Número de unidades no conformes"), use_container_width=True, key="control_np")
-
-    elif tipo == "c":
-        ccol = selectbox_persistente(st, "Defectos", nums, "ctrl_c_defectos", nums[0])
-        calc = calcular_c(df, ccol)
-        if calc is None:
-            st.error("No se pudo calcular c.")
-            return
-        temp, lim = calc
-        tarjetas(st, lim, "Carta c")
-        st.plotly_chart(grafico_lineas_atributos(go, temp.index + 1, temp["c"], lim["LC c"], lim["LCS c"], lim["LCI c"], "Carta c", "Número de defectos"), use_container_width=True, key="control_c")
-
-    else:
-        dcol = selectbox_persistente(st, "Defectos", nums, "ctrl_u_defectos", nums[0])
-        ncol = selectbox_persistente(st, "Unidades inspeccionadas", nums, "ctrl_u_unidades", nums[0])
-        calc = calcular_u(df, dcol, ncol)
-        if calc is None:
-            st.error("No se pudo calcular u.")
-            return
-        temp, lim = calc
-        tarjetas(st, lim, "Carta u")
-        st.plotly_chart(grafico_lineas_atributos(go, temp.index + 1, temp["u"], lim["u barra"], temp["LCS"], temp["LCI"], "Carta u", "Defectos por unidad"), use_container_width=True, key="control_u")
-
+        if modo in ["Fase I: estimar límites", "Vista completa"]:
+            _mostrar_resumen_fase(st, lim, f"Fase I: carta {tipo}")
+            if tipo == "c":
+                st.plotly_chart(grafico_lineas_atributos(go, temp.index + 1, temp["c"], lim["LC c"], lim["LCS c"], lim["LCI c"], "Carta c - Fase I", "Número de defectos"), use_container_width=True, key="fase1_c")
+            else:
+                st.plotly_chart(grafico_lineas_atributos(go, temp.index + 1, temp["u"], lim["u barra"], temp["LCS"], temp["LCI"], "Carta u - Fase I", "Defectos por unidad"), use_container_width=True, key="fase1_u")
+            if st.button(f"Guardar límites carta {tipo} para Fase II"):
+                guardar_limites(f"lim_fase1_{tipo}", lim)
+        if modo in ["Fase II: monitorear con límites de Fase I", "Vista completa"]:
+            st.markdown(f"#### Fase II: monitoreo carta {tipo}")
+            lim2 = st.session_state.get(f"lim_fase1_{tipo}", lim)
+            df2 = _leer_datos_fase_ii(st)
+            if dataframe_valido(df2) and dcol in df2.columns and (tipo == "c" or ncol in df2.columns):
+                calc2 = calcular_c(df2, dcol) if tipo == "c" else calcular_u(df2, dcol, ncol)
+                if calc2:
+                    temp2, _ = calc2
+                    if tipo == "c":
+                        st.plotly_chart(grafico_lineas_atributos(go, temp2.index + 1, temp2["c"], lim2["LC c"], lim2["LCS c"], lim2["LCI c"], "Carta c - Fase II", "Límites fijos de Fase I"), use_container_width=True, key="fase2_c")
+                        fuera = int(((temp2["c"] > lim2["LCS c"]) | (temp2["c"] < lim2["LCI c"])).sum())
+                    else:
+                        ubar = lim2["u barra"]
+                        temp2["LCS_FaseI"] = ubar + 3 * np.sqrt(ubar / temp2["n"])
+                        temp2["LCI_FaseI"] = (ubar - 3 * np.sqrt(ubar / temp2["n"])).clip(lower=0)
+                        st.plotly_chart(grafico_lineas_atributos(go, temp2.index + 1, temp2["u"], ubar, temp2["LCS_FaseI"], temp2["LCI_FaseI"], "Carta u - Fase II", "Límites fijos de Fase I"), use_container_width=True, key="fase2_u")
+                        fuera = int(((temp2["u"] > temp2["LCS_FaseI"]) | (temp2["u"] < temp2["LCI_FaseI"])).sum())
+                    tarjetas(st, {"Muestras monitoreadas": len(temp2), "Puntos fuera": fuera, "Estado": "Alerta" if fuera else "Sin señal"}, "Resultado Fase II")
+                    st.dataframe(temp2.reset_index(), use_container_width=True, hide_index=True)
 
 def pantalla_capacidad(st, go):
     df = st.session_state.get("df")
@@ -1303,11 +1989,22 @@ def pantalla_capacidad(st, go):
     if pd.isna(sigma_base) or sigma_base <= 0:
         sigma_base = 1.0
 
-    guardar_estado_si_no_existe(st, "cap_vn", media_base)
+    p_activos = parametros_proceso(st)
+    if p_activos.get("variable") != variable:
+        actualizar_parametros_desde_df(st, df, variable)
+        p_activos = parametros_proceso(st)
+    media_base = float(p_activos.get("media", media_base))
+    sigma_base = float(p_activos.get("sigma", sigma_base))
+    vn_base = float(p_activos.get("vn", media_base))
+    lie_base = float(p_activos.get("lie", serie.min()))
+    lse_base = float(p_activos.get("lse", serie.max()))
+    tolerancia_base = float(p_activos.get("tolerancia", max(1.0, sigma_base)))
+
+    guardar_estado_si_no_existe(st, "cap_vn", vn_base)
     guardar_estado_si_no_existe(st, "cap_usar_tolerancia", True)
-    guardar_estado_si_no_existe(st, "cap_tolerancia", float(max(1.0, sigma_base)))
-    guardar_estado_si_no_existe(st, "cap_lie", float(serie.min()))
-    guardar_estado_si_no_existe(st, "cap_lse", float(serie.max()))
+    guardar_estado_si_no_existe(st, "cap_tolerancia", tolerancia_base)
+    guardar_estado_si_no_existe(st, "cap_lie", lie_base)
+    guardar_estado_si_no_existe(st, "cap_lse", lse_base)
     guardar_estado_si_no_existe(st, "cap_metodo_sigma", "Sigma muestral")
     guardar_estado_si_no_existe(st, "cap_sigma_historica", sigma_base)
     guardar_estado_si_no_existe(st, "cap_rbarra", 10.100)
@@ -1324,7 +2021,7 @@ def pantalla_capacidad(st, go):
     col_config, col_resumen = st.columns([1.05, 0.95])
 
     with col_config:
-        vn = numero_persistente(st, "VN | Valor nominal u objetivo", "cap_vn", media_base)
+        vn = numero_persistente(st, "VN | Valor nominal u objetivo", "cap_vn", vn_base)
         usar_tolerancia = checkbox_persistente(
             st,
             "Calcular LIE y LSE desde VN ± tolerancia",
@@ -1337,7 +2034,7 @@ def pantalla_capacidad(st, go):
                 st,
                 "Tolerancia",
                 "cap_tolerancia",
-                float(max(1.0, sigma_base)),
+                tolerancia_base,
                 min_value=0.000001,
             )
             lie = vn - tolerancia
@@ -1348,13 +2045,13 @@ def pantalla_capacidad(st, go):
                 st,
                 "LIE | Límite inferior de especificación",
                 "cap_lie",
-                float(serie.min()),
+                lie_base,
             )
             lse = numero_persistente(
                 st,
                 "LSE | Límite superior de especificación",
                 "cap_lse",
-                float(serie.max()),
+                lse_base,
             )
 
         metodo_sigma = radio_persistente(
@@ -1422,6 +2119,28 @@ def pantalla_capacidad(st, go):
     if resultado is None:
         st.error("No se pudo calcular capacidad. Revisa la variabilidad, LIE y LSE.")
         return
+
+    guardar_parametros_proceso(
+        st,
+        variable=variable,
+        media=resultado["Media usada"],
+        sigma=resultado["Sigma usada"],
+        vn=resultado["VN"],
+        lie=resultado["LIE"],
+        lse=resultado["LSE"],
+        tolerancia=max(abs(resultado["LSE"] - resultado["VN"]), abs(resultado["VN"] - resultado["LIE"])),
+        cp=resultado["Cp"],
+        cpk=resultado["Cpk"],
+        cpu=resultado["CPU"],
+        cpl=resultado["CPL"],
+        pnc_lie=resultado["% PNC estimado LIE"],
+        pnc_lse=resultado["% PNC estimado LSE"],
+        pnc_total=resultado["% PNC estimado total"],
+        riesgo=resultado["Riesgo principal"],
+        estado=resultado["Estado"],
+    )
+    sincronizar_parametros_widgets(st)
+    panel_parametros_activos(st)
 
     tarjetas(st, {
         "Cp": resultado["Cp"],
@@ -1527,31 +2246,61 @@ def pantalla_capacidad(st, go):
         )
 
     with t5:
-        cambio = numero_persistente(
-            st,
-            "Media que se desea detectar",
-            "cap_media_detectar",
-            float(vn),
-        )
-        nsub = numero_persistente(
-            st,
-            "Tamaño de subgrupo",
-            "cap_nsub",
-            5,
-            min_value=1,
-            step=1,
-        )
-        intervalo = numero_persistente(
-            st,
-            "Intervalo entre muestras en minutos",
-            "cap_intervalo",
-            15.0,
-            min_value=1.0,
-        )
-        pot = potencia_xbarra(resultado["Media usada"], cambio, resultado["Sigma usada"], int(nsub))
+        st.markdown("#### Potencia para carta X-barra")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            cambio = numero_persistente(
+                st,
+                "Media que se desea detectar",
+                "cap_media_detectar",
+                float(vn),
+            )
+        with c2:
+            nsub = numero_persistente(
+                st,
+                "Tamaño de subgrupo",
+                "cap_nsub",
+                5,
+                min_value=1,
+                step=1,
+            )
+        with c3:
+            intervalo = numero_persistente(
+                st,
+                "Intervalo entre muestras en minutos",
+                "cap_intervalo",
+                15.0,
+                min_value=1.0,
+            )
+        with c4:
+            zcrit = numero_persistente(
+                st,
+                "Z crítico",
+                "cap_zcrit",
+                3.0,
+                min_value=0.01,
+                step=0.1,
+            )
+
+        pot = potencia_xbarra(resultado["Media usada"], cambio, resultado["Sigma usada"], int(nsub), float(zcrit))
         if pot:
             pot["ATS1 minutos"] = pot["ARL1"] * intervalo if np.isfinite(pot["ARL1"]) else np.inf
-            tabla(st, pot, "Potencia, ARL y ATS")
+            tabla(st, pot, "Potencia X-barra detallada")
+            pasos = [
+                f"1. Media actual = {fmt(pot['Media actual'])}.",
+                f"2. Media a detectar = {fmt(pot['Media a detectar'])}.",
+                f"3. Sigma usada = {fmt(pot['Sigma usada'])}.",
+                f"4. Diferencia absoluta = |media a detectar - media actual| = {fmt(pot['Diferencia absoluta'])}.",
+                f"5. d = diferencia absoluta / sigma usada = {fmt(pot['d'])}.",
+                f"6. d√n = d × raíz del tamaño de subgrupo = {fmt(pot['d√n'])}.",
+                f"7. Z crítico - d√n = {fmt(pot['Z crítico - d√n'])}.",
+                f"8. β = P(no detectar el cambio) = {fmt(pot['β'])}, equivalente a {fmt(pot['% β'])}%.",
+                f"9. Potencia = 1 - β = {fmt(pot['Potencia = 1 - β'])}, equivalente a {fmt(pot['% Potencia'])}%.",
+                f"10. ARL1 = 1 / potencia = {fmt(pot['ARL1'])}. ATS1 = ARL1 × intervalo = {fmt(pot['ATS1 minutos'])} minutos.",
+            ]
+            st.markdown("#### Explicación paso a paso")
+            for paso in pasos:
+                caja_estado(st, "info", paso)
 
         objetivo_pot = numero_persistente(
             st,
@@ -1561,7 +2310,7 @@ def pantalla_capacidad(st, go):
             min_value=0.01,
             max_value=0.99,
         )
-        n_req = n_para_potencia(resultado["Media usada"], cambio, resultado["Sigma usada"], objetivo_pot)
+        n_req = n_para_potencia(resultado["Media usada"], cambio, resultado["Sigma usada"], objetivo_pot, float(zcrit))
         if n_req:
             caja_estado(st, "ok", f"Tamaño de subgrupo sugerido: n = {n_req}")
 
@@ -1591,11 +2340,16 @@ def pantalla_no_conformes(st, go):
     )
 
     if modo == "Por especificación":
-        col = selectbox_persistente(st, "Variable de medición", nums, "nc_variable", nums[0])
+        p_activos = parametros_proceso(st)
+        variable_defecto = p_activos.get("variable", nums[0]) if p_activos.get("variable", nums[0]) in nums else nums[0]
+        col = selectbox_persistente(st, "Variable de medición", nums, "nc_variable", variable_defecto)
         s = convertir_a_numerica(obtener_columna(df, col))
-        guardar_estado_si_no_existe(st, "nc_vn", float(s.mean()))
-        guardar_estado_si_no_existe(st, "nc_lie", float(s.min()))
-        guardar_estado_si_no_existe(st, "nc_lse", float(s.max()))
+        if p_activos.get("variable") != col:
+            actualizar_parametros_desde_df(st, df, col)
+            p_activos = parametros_proceso(st)
+        guardar_estado_si_no_existe(st, "nc_vn", float(p_activos.get("vn", s.mean())))
+        guardar_estado_si_no_existe(st, "nc_lie", float(p_activos.get("lie", s.min())))
+        guardar_estado_si_no_existe(st, "nc_lse", float(p_activos.get("lse", s.max())))
 
         c1, c2, c3 = st.columns(3)
         with c1:
@@ -1610,14 +2364,28 @@ def pantalla_no_conformes(st, go):
         bajo = df[valores < lie]
         alto = df[valores > lse]
         total = df[(valores < lie) | (valores > lse)]
+        pct_lie = len(bajo) / n_validos * 100 if n_validos else 0
+        pct_lse = len(alto) / n_validos * 100 if n_validos else 0
+        pct_total = len(total) / n_validos * 100 if n_validos else 0
         tarjetas(st, {
             "Evaluados": n_validos,
             "Conformes": n_validos - len(total),
             "No conformes": len(total),
             "Por LIE": len(bajo),
+            "% por LIE": pct_lie,
             "Por LSE": len(alto),
-            "% no conforme": len(total) / n_validos * 100 if n_validos else 0,
+            "% por LSE": pct_lse,
+            "% no conforme total": pct_total,
         }, "Resumen no conforme")
+        detalle_nc = pd.DataFrame([
+            {"Límite": "LIE", "Condición": f"{col} < {fmt(lie)}", "No conformes": len(bajo), "% sobre evaluados": pct_lie},
+            {"Límite": "LSE", "Condición": f"{col} > {fmt(lse)}", "No conformes": len(alto), "% sobre evaluados": pct_lse},
+            {"Límite": "Total", "Condición": "Fuera de LIE o LSE", "No conformes": len(total), "% sobre evaluados": pct_total},
+        ])
+        st.markdown("### Porcentaje de no conformes por límite")
+        st.dataframe(detalle_nc, use_container_width=True, hide_index=True)
+        guardar_parametros_proceso(st, variable=col, vn=vn, lie=lie, lse=lse, pnc_observado=pct_total, pnc_observado_lie=pct_lie, pnc_observado_lse=pct_lse)
+        sincronizar_parametros_widgets(st)
         st.plotly_chart(grafico_hist_capacidad(go, s, lie, lse, vn), use_container_width=True, key="no_conformes_hist")
         t1, t2, t3 = st.tabs(["Todos", "Bajo LIE", "Sobre LSE"])
         with t1:
@@ -1665,6 +2433,173 @@ def pantalla_muestreo(st, go):
     pa_ltpd = float(stats.binom.cdf(int(c), int(n), float(ltpd)))
     tarjetas(st, {"Pa(AQL)": pa_aql, "Alfa": 1 - pa_aql, "Pa(LTPD) / Beta": pa_ltpd, "Plan": f"n={int(n)}, c={int(c)}"}, "Plan de muestreo")
     st.plotly_chart(grafico_oc(go, datos, aql, ltpd), use_container_width=True, key="muestreo_oc")
+
+
+def pantalla_diseno_graficos(st, go):
+    st.markdown("### Diseño de gráficos ARL y ATS")
+    caja_estado(st, "info", "Diseña una carta X-barra según la rapidez con la que debe detectar cambios en la media. Calcula potencia, beta, ARL0, ATS0, ARL1, ATS1 y tamaño de subgrupo recomendado.")
+
+    p_activos = parametros_proceso(st)
+    media_def = float(p_activos.get("media", 0.0))
+    sigma_def = float(p_activos.get("sigma", 1.0))
+    lse_def = float(p_activos.get("lse", media_def + sigma_def))
+    n_def = int(p_activos.get("nsub", 5)) if p_activos.get("nsub", 5) else 5
+    intervalo_def = float(p_activos.get("intervalo", 15.0))
+    panel_parametros_activos(st)
+
+    guardar_estado_si_no_existe(st, "dis_media_actual", media_def)
+    guardar_estado_si_no_existe(st, "dis_media_cambio", lse_def)
+    guardar_estado_si_no_existe(st, "dis_sigma", sigma_def)
+    guardar_estado_si_no_existe(st, "dis_n", n_def)
+    guardar_estado_si_no_existe(st, "dis_intervalo", intervalo_def)
+    guardar_estado_si_no_existe(st, "dis_z", 3.0)
+    guardar_estado_si_no_existe(st, "dis_pot_obj", 0.90)
+
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        media_actual = numero_persistente(st, "Media actual del proceso", "dis_media_actual", media_def, format="%.8f")
+        media_cambio = numero_persistente(st, "Media que se desea detectar", "dis_media_cambio", lse_def, format="%.8f")
+    with c2:
+        sigma = numero_persistente(st, "Sigma del proceso", "dis_sigma", sigma_def, min_value=0.000001, format="%.8f")
+        n = numero_persistente(st, "Tamaño de subgrupo n", "dis_n", n_def, min_value=1, step=1)
+    with c3:
+        intervalo = numero_persistente(st, "Tiempo entre muestras en minutos", "dis_intervalo", intervalo_def, min_value=0.000001, format="%.4f")
+        z = numero_persistente(st, "Z crítico", "dis_z", 3.0, min_value=1.0, max_value=6.0, step=0.1)
+
+    res = calcular_desempeno_grafico_xbarra(float(media_actual), float(media_cambio), float(sigma), int(n), float(intervalo), float(z))
+    if res is None:
+        st.error("No se pudo calcular el desempeño. Revisa sigma, n e intervalo.")
+        return
+
+    guardar_parametros_proceso(st, media=float(media_actual), sigma=float(sigma), media_detectar=float(media_cambio), nsub=int(n), intervalo=float(intervalo), arl0=res["ARL0"], arl1=res["ARL1"], ats0=res["ATS0 minutos"], ats1=res["ATS1 minutos"], potencia=res["potencia = 1 - β"])
+
+    tarjetas(st, {
+        "Potencia %": res["% potencia"],
+        "β %": res["% β"],
+        "ARL0": res["ARL0"],
+        "ATS0 min": res["ATS0 minutos"],
+        "ARL1": res["ARL1"],
+        "ATS1 min": res["ATS1 minutos"],
+        "d": res["d"],
+        "d√n": res["d√n"],
+    }, "Desempeño del gráfico")
+
+    tab1, tab2, tab3 = st.tabs(["Tabla completa", "Diseñar n", "Explicación"])
+    with tab1:
+        tabla(st, res, "ARL, ATS y potencia")
+    with tab2:
+        pot_obj = numero_persistente(st, "Potencia objetivo", "dis_pot_obj", 0.90, min_value=0.01, max_value=0.999, step=0.01)
+        n_req = n_para_potencia_xbarra(float(media_actual), float(media_cambio), float(sigma), float(pot_obj), float(z))
+        if n_req:
+            res_req = calcular_desempeno_grafico_xbarra(float(media_actual), float(media_cambio), float(sigma), int(n_req), float(intervalo), float(z))
+            tarjetas(st, {"n recomendado": n_req, "Potencia lograda %": res_req["% potencia"], "ARL1": res_req["ARL1"], "ATS1 min": res_req["ATS1 minutos"]}, "Diseño sugerido")
+            caja_estado(st, "ok", f"Para detectar el cambio de {fmt(media_actual)} a {fmt(media_cambio)} con potencia cercana a {fmt(float(pot_obj)*100)}%, se recomienda n = {n_req}.")
+        else:
+            caja_estado(st, "alerta", "No se puede calcular n porque no hay cambio entre medias o los datos no son válidos.")
+    with tab3:
+        pasos = [
+            f"1. d = |media a detectar - media actual| / sigma = {fmt(res['d'])}.",
+            f"2. d√n = {fmt(res['d√n'])}.",
+            f"3. β es la probabilidad de no detectar el cambio cuando ya ocurrió.",
+            f"4. Potencia = 1 - β = {fmt(res['potencia = 1 - β'])}, equivalente a {fmt(res['% potencia'])}%.",
+            f"5. ARL1 = 1 / potencia = {fmt(res['ARL1'])} muestras promedio para detectar el cambio.",
+            f"6. ATS1 = ARL1 × intervalo = {fmt(res['ATS1 minutos'])} minutos promedio de detección.",
+        ]
+        for paso in pasos:
+            caja_estado(st, "info", paso)
+
+
+def generar_diagnostico_integral(df, variable, lie, lse, vn=None, sigma_hist=None):
+    s = convertir_a_numerica(obtener_columna(df, variable))
+    cap = calcular_capacidad(s, lie, lse, vn, sigma_hist if sigma_hist and sigma_hist > 0 else None, None) if lie < lse else None
+    normalidad = evaluar_normalidad(s)
+    estado_norm, texto_norm = diagnostico_normalidad(normalidad)
+    ind = evaluar_independencia(s)
+    filas = []
+    filas.append({"Componente": "Normalidad", "Resultado": estado_norm, "Interpretación": texto_norm})
+    filas.append({"Componente": "Independencia", "Resultado": ind.get("Resultado"), "Interpretación": ind.get("Interpretación")})
+    if cap:
+        filas.append({"Componente": "Capacidad", "Resultado": cap["Estado"], "Interpretación": f"Cp={fmt(cap['Cp'])}, Cpk={fmt(cap['Cpk'])}. Riesgo principal: {cap['Riesgo principal']}."})
+        filas.append({"Componente": "Producto no conforme", "Resultado": f"{fmt(cap['% PNC estimado total'])}%", "Interpretación": f"LIE: {fmt(cap['% PNC estimado LIE'])}%, LSE: {fmt(cap['% PNC estimado LSE'])}%."})
+        if cap["Cpk"] < 1:
+            accion = "El proceso no debe liberarse como capaz sin acciones de mejora. Se recomienda reducir variabilidad y ajustar centrado."
+        elif cap["Cpk"] < 1.33:
+            accion = "El proceso es marginal. Debe mantenerse monitoreo frecuente y plan de reducción de variabilidad."
+        else:
+            accion = "El proceso tiene desempeño aceptable, sujeto a que se mantenga bajo control estadístico."
+        filas.append({"Componente": "Juicio de ingeniería", "Resultado": "Acción técnica", "Interpretación": accion})
+    return pd.DataFrame(filas), cap
+
+
+def pantalla_conclusiones_mejora(st, go):
+    df = st.session_state.get("df")
+    if not dataframe_valido(df):
+        st.warning("Primero carga datos.")
+        return
+    nums = columnas_numericas(df)
+    if not nums:
+        st.error("No hay columnas numéricas.")
+        return
+
+    st.markdown("### Conclusiones y plan de mejora")
+    caja_estado(st, "info", "Este módulo convierte los resultados estadísticos en diagnóstico empresarial, conclusiones técnicas y acciones de mejora. Sirve para cualquier producto, proceso o variable de calidad.")
+
+    p_activos = parametros_proceso(st)
+    variable_defecto = p_activos.get("variable", nums[0]) if p_activos.get("variable", nums[0]) in nums else nums[0]
+    variable = selectbox_persistente(st, "Variable crítica de calidad", nums, "conc_variable", variable_defecto)
+    s = convertir_a_numerica(obtener_columna(df, variable))
+    if p_activos.get("variable") != variable:
+        actualizar_parametros_desde_df(st, df, variable)
+        p_activos = parametros_proceso(st)
+    panel_parametros_activos(st)
+    guardar_estado_si_no_existe(st, "conc_vn", float(p_activos.get("vn", s.mean())))
+    guardar_estado_si_no_existe(st, "conc_lie", float(p_activos.get("lie", s.min())))
+    guardar_estado_si_no_existe(st, "conc_lse", float(p_activos.get("lse", s.max())))
+    guardar_estado_si_no_existe(st, "conc_sigma", float(p_activos.get("sigma", 0.0)))
+    guardar_estado_si_no_existe(st, "conc_producto", "producto")
+    guardar_estado_si_no_existe(st, "conc_empresa", "empresa")
+
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        empresa = st.text_input("Empresa", value=st.session_state.get("conc_empresa", "empresa"), key="conc_empresa")
+        producto = st.text_input("Producto", value=st.session_state.get("conc_producto", "producto"), key="conc_producto")
+    with c2:
+        vn = numero_persistente(st, "VN u objetivo", "conc_vn", float(p_activos.get("vn", s.mean())), format="%.6f")
+    with c3:
+        lie = numero_persistente(st, "LIE", "conc_lie", float(p_activos.get("lie", s.min())), format="%.6f")
+    with c4:
+        lse = numero_persistente(st, "LSE", "conc_lse", float(p_activos.get("lse", s.max())), format="%.6f")
+        sigma_hist = numero_persistente(st, "Sigma histórica opcional", "conc_sigma", float(p_activos.get("sigma", 0.0)), min_value=0.0, format="%.6f")
+
+    diagnostico, cap = generar_diagnostico_integral(df, variable, float(lie), float(lse), float(vn), float(sigma_hist))
+    st.dataframe(diagnostico, use_container_width=True, hide_index=True)
+
+    if cap:
+        tarjetas(st, {"Cp": cap["Cp"], "Cpk": cap["Cpk"], "PNC total %": cap["% PNC estimado total"], "Riesgo": cap["Riesgo principal"], "Estado": cap["Estado"], "Centrado": cap["Centrado"]}, "Resumen ejecutivo")
+        acciones = []
+        if cap["Riesgo principal"] == "LSE":
+            acciones.append("Revisar ajuste de dosificación, calibración o parámetros operativos para evitar valores por encima del límite superior.")
+        elif cap["Riesgo principal"] == "LIE":
+            acciones.append("Revisar ajustes que estén generando valores por debajo del límite inferior.")
+        if cap["Cp"] < 1:
+            acciones.append("Reducir variabilidad mediante mantenimiento, estandarización operativa, control de materia prima y capacitación.")
+        if cap["Cpk"] < cap["Cp"] * 0.85:
+            acciones.append("Centrar la media del proceso hacia el valor objetivo o centro de especificación.")
+        acciones.append("Mantener seguimiento con cartas de control y documentar causas especiales cuando aparezcan señales fuera de control.")
+        st.markdown("#### Plan de acción priorizado")
+        plan = pd.DataFrame({"Prioridad": range(1, len(acciones)+1), "Acción recomendada": acciones, "Impacto esperado": ["Alto" if i < 3 else "Medio" for i in range(1, len(acciones)+1)]})
+        st.dataframe(plan, use_container_width=True, hide_index=True)
+        conclusion = (
+            f"Con base en el análisis realizado en Pulso de Calidad SPC, el proceso asociado al producto {producto} en la empresa {empresa} "
+            f"presenta una media de {fmt(cap['Media usada'])}, una sigma usada de {fmt(cap['Sigma usada'])}, Cp = {fmt(cap['Cp'])} y Cpk = {fmt(cap['Cpk'])}. "
+            f"El proceso se clasifica como {cap['Estado']} y el riesgo principal se concentra hacia {cap['Riesgo principal']}. "
+            f"El porcentaje estimado de producto no conforme total es {fmt(cap['% PNC estimado total'])}%, por lo que se recomienda priorizar acciones de mejora enfocadas en "
+            f"reducir variabilidad, centrar el proceso y mantener control estadístico continuo."
+        )
+        st.markdown("#### Conclusión lista para informe")
+        st.text_area("Puedes copiar este texto", value=conclusion, height=150)
+    else:
+        caja_estado(st, "alerta", "No se pudo calcular capacidad. Revisa LIE, LSE y variabilidad de los datos.")
 
 
 def pantalla_asistente(st):
@@ -1844,21 +2779,24 @@ def pantalla_reporte(st, go):
 
     st.markdown("### Informe visual en Excel")
     caja_estado(st, "info", "El informe se genera en una sola hoja. Usa los mismos gráficos de la app como imágenes. Para insertar imágenes instala: python -m pip install kaleido")
+    panel_parametros_activos(st)
 
     c1, c2, c3 = st.columns(3)
     with c1:
-        variable = selectbox_persistente(st, "Variable principal", nums, "rep_variable", nums[0])
+        p_activos = parametros_proceso(st)
+        variable_defecto = p_activos.get("variable", nums[0]) if p_activos.get("variable", nums[0]) in nums else nums[0]
+        variable = selectbox_persistente(st, "Variable principal", nums, "rep_variable", variable_defecto)
         subgrupo = selectbox_persistente(st, "Subgrupo para carta X-barra/R", ["Ninguno"] + df.columns.tolist(), "rep_subgrupo", "Ninguno")
     with c2:
-        guardar_estado_si_no_existe(st, "rep_vn", float(convertir_a_numerica(obtener_columna(df, variable)).mean()))
-        vn = numero_persistente(st, "VN | Valor nominal", "rep_vn", float(convertir_a_numerica(obtener_columna(df, variable)).mean()))
-        guardar_estado_si_no_existe(st, "rep_lie", float(convertir_a_numerica(obtener_columna(df, variable)).min()))
-        lie = numero_persistente(st, "LIE | Límite inferior", "rep_lie", float(convertir_a_numerica(obtener_columna(df, variable)).min()))
+        guardar_estado_si_no_existe(st, "rep_vn", float(parametros_proceso(st).get("vn", convertir_a_numerica(obtener_columna(df, variable)).mean())))
+        vn = numero_persistente(st, "VN | Valor nominal", "rep_vn", float(parametros_proceso(st).get("vn", convertir_a_numerica(obtener_columna(df, variable)).mean())))
+        guardar_estado_si_no_existe(st, "rep_lie", float(parametros_proceso(st).get("lie", convertir_a_numerica(obtener_columna(df, variable)).min())))
+        lie = numero_persistente(st, "LIE | Límite inferior", "rep_lie", float(parametros_proceso(st).get("lie", convertir_a_numerica(obtener_columna(df, variable)).min())))
     with c3:
-        guardar_estado_si_no_existe(st, "rep_lse", float(convertir_a_numerica(obtener_columna(df, variable)).max()))
-        lse = numero_persistente(st, "LSE | Límite superior", "rep_lse", float(convertir_a_numerica(obtener_columna(df, variable)).max()))
-        guardar_estado_si_no_existe(st, "rep_sigma_hist", 0.0)
-        sigma_hist = numero_persistente(st, "Sigma histórica opcional", "rep_sigma_hist", 0.0, min_value=0.0, format="%.6f")
+        guardar_estado_si_no_existe(st, "rep_lse", float(parametros_proceso(st).get("lse", convertir_a_numerica(obtener_columna(df, variable)).max())))
+        lse = numero_persistente(st, "LSE | Límite superior", "rep_lse", float(parametros_proceso(st).get("lse", convertir_a_numerica(obtener_columna(df, variable)).max())))
+        guardar_estado_si_no_existe(st, "rep_sigma_hist", float(parametros_proceso(st).get("sigma", 0.0)))
+        sigma_hist = numero_persistente(st, "Sigma histórica opcional", "rep_sigma_hist", float(parametros_proceso(st).get("sigma", 0.0)), min_value=0.0, format="%.6f")
 
     s = convertir_a_numerica(obtener_columna(df, variable))
     sigma_usada = sigma_hist if sigma_hist > 0 else None
@@ -1935,10 +2873,8 @@ def pantalla_reporte(st, go):
 
 
 # ============================================================
-# 8. PRUEBAS INTERNAS
+# PRUEBAS
 # ============================================================
-# Pruebas internas para validar funcionamiento de cálculos clave
-# Permiten asegurar consistencia antes de ejecutar análisis reales
 
 def ejecutar_pruebas():
     if FALTAN_BASE:
@@ -1957,10 +2893,8 @@ def ejecutar_pruebas():
 
 
 # ============================================================
-# 9. EJECUCIÓN PRINCIPAL DE LA APP
+# APP
 # ============================================================
-# Punto de entrada de la aplicación
-# Controla navegación, ejecución de módulos y flujo general del sistema
 
 def ejecutar_app():
     if FALTAN_BASE:
@@ -1978,39 +2912,48 @@ def ejecutar_app():
         st.session_state["df_original"] = None
     st.sidebar.title("Pulso de Calidad SPC")
     st.sidebar.caption("Control Estadístico de Procesos")
-    menu = st.sidebar.radio("Selecciona un módulo", [
+    st.sidebar.caption("Desarrollador: Jerson Andrés López Wilches | Contacto: jerssonpriv@gmail.com")
+    menu = st.sidebar.radio("Selecciona una sección", [
         "Inicio",
-        "Cargar datos",
-        "Supuestos del proceso",
-        "Gráficos de control",
+        "Gestión de datos",
+        "Gráficos de control por variables",
+        "Gráficos de control por atributos",
+        "Validación de supuestos",
         "Capacidad del proceso",
-        "Producto no conforme",
+        "Diseño de gráficos",
         "Muestreo de aceptación",
+        "Reportes",
+        "Conclusiones y plan de mejora",
         "Asistente de proyecto",
-        "Monitoreo en tiempo real",
-        "Reporte",
     ], key="menu_principal")
     encabezado(st, "Pulso de Calidad SPC", "Panel visual para analizar, controlar y mejorar procesos con datos.")
+    
     if menu == "Inicio":
         pantalla_inicio(st)
-    elif menu == "Cargar datos":
+    elif menu == "Gestión de datos":
         pantalla_cargar_datos(st)
-    elif menu == "Supuestos del proceso":
-        pantalla_supuestos(st, go)
-    elif menu == "Gráficos de control":
+    elif menu == "Gráficos de control por variables":
+        st.info("Cartas por variables. Incluye I-MR, X-barra/R y X-barra/S, con Fase I para estimar límites y Fase II para monitorear con límites fijos.")
+        st.session_state["filtro_control_tipo"] = "variables"
         pantalla_control(st, go)
+    elif menu == "Gráficos de control por atributos":
+        st.info("Cartas por atributos. Incluye p, np, c y u, con selección justificada según tipo de dato, tamaño muestral y naturaleza del defecto.")
+        st.session_state["filtro_control_tipo"] = "atributos"
+        pantalla_control(st, go)
+    elif menu == "Validación de supuestos":
+        pantalla_supuestos(st, go)
     elif menu == "Capacidad del proceso":
         pantalla_capacidad(st, go)
-    elif menu == "Producto no conforme":
-        pantalla_no_conformes(st, go)
+    elif menu == "Diseño de gráficos":
+        pantalla_diseno_graficos(st, go)
     elif menu == "Muestreo de aceptación":
         pantalla_muestreo(st, go)
+    elif menu == "Reportes":
+        pantalla_reporte(st, go)
+    elif menu == "Conclusiones y plan de mejora":
+        pantalla_conclusiones_mejora(st, go)
     elif menu == "Asistente de proyecto":
         pantalla_asistente(st)
-    elif menu == "Monitoreo en tiempo real":
-        pantalla_monitoreo(st, go)
-    elif menu == "Reporte":
-        pantalla_reporte(st, go)
 
 
 if __name__ == "__main__":
